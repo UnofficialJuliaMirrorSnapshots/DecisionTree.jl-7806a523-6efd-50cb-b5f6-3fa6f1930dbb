@@ -27,8 +27,8 @@ function stack_function_results(row_fun::Function, X::Matrix)
     N = size(X, 1)
     N_cols = length(row_fun(X[1, :])) # gets the number of columns
     out = Array{Float64}(undef, N, N_cols)
-    for i in 1:N
-        out[i, :] = row_fun(X[i, :])
+    Threads.@threads for i in 1:N
+        out[i, :] = row_fun(@view X[i, :])
     end
     return out
 end
@@ -78,6 +78,7 @@ function build_tree(
         min_samples_leaf     = 1,
         min_samples_split    = 2,
         min_purity_increase  = 0.0;
+        loss                 = util.entropy :: Function,
         rng                  = Random.GLOBAL_RNG) where {S, T}
 
     if max_depth == -1
@@ -92,6 +93,7 @@ function build_tree(
         X                   = features,
         Y                   = labels,
         W                   = nothing,
+        loss                = loss,
         max_features        = Int(n_subfeatures),
         max_depth           = Int(max_depth),
         min_samples_leaf    = Int(min_samples_leaf),
@@ -135,9 +137,9 @@ function prune_tree(tree::LeafOrNode{S, T}, purity_thresh=1.0) where {S, T}
 end
 
 
-apply_tree(leaf::Leaf{T}, feature::Vector{S}) where {S, T} = leaf.majority
+apply_tree(leaf::Leaf{T}, feature::AbstractVector{S}) where {S, T} = leaf.majority
 
-function apply_tree(tree::Node{S, T}, features::Vector{S}) where {S, T}
+function apply_tree(tree::Node{S, T}, features::AbstractVector{S}) where {S, T}
     if features[tree.featid] < tree.featval
         return apply_tree(tree.left, features)
     else
@@ -210,9 +212,15 @@ function build_forest(
     n_samples = floor(Int, partial_sampling * t_samples)
 
     rngs = mk_rng(rng)::Random.AbstractRNG
-    forest = Distributed.@distributed (vcat) for i in 1:n_trees
+
+    forest = Vector{LeafOrNode{S, T}}(undef, n_trees)
+
+    entropy_terms = util.compute_entropy_terms(n_samples)
+    loss = (ns, n) -> util.entropy(ns, n, entropy_terms)
+
+    Threads.@threads for i in 1:n_trees
         inds = rand(rngs, 1:t_samples, n_samples)
-        build_tree(
+        forest[i] = build_tree(
             labels[inds],
             features[inds,:],
             n_subfeatures,
@@ -220,14 +228,11 @@ function build_forest(
             min_samples_leaf,
             min_samples_split,
             min_purity_increase,
+            loss = loss,
             rng = rngs)
     end
 
-    if n_trees == 1
-        return Ensemble{S, T}([forest])
-    else
-        return Ensemble{S, T}(forest)
-    end
+    return Ensemble{S, T}(forest)
 end
 
 function apply_forest(forest::Ensemble{S, T}, features::Vector{S}) where {S, T}
@@ -261,7 +266,7 @@ n_labels` matrix of probabilities, each row summing up to 1.
 `col_labels` is a vector containing the distinct labels
 (eg. ["versicolor", "virginica", "setosa"]). It specifies the column ordering
 of the output matrix. """
-function apply_forest_proba(forest::Ensemble{S, T}, features::Vector{S}, labels) where {S, T}
+function apply_forest_proba(forest::Ensemble{S, T}, features::AbstractVector{S}, labels) where {S, T}
     votes = [apply_tree(tree, features) for tree in forest.trees]
     return compute_probabilities(labels, votes)
 end

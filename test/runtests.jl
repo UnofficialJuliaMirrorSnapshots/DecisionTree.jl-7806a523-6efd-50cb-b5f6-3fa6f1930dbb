@@ -1,6 +1,5 @@
 using DecisionTree
 using DelimitedFiles
-using Distributed
 using Random
 using ScikitLearnBase
 using Statistics
@@ -34,7 +33,7 @@ regression =     [
 ]
 
 miscellaneous =  [
-    "miscellaneous/parallel.jl"
+#    "miscellaneous/parallel.jl"
 ]
 
 test_suites = [
